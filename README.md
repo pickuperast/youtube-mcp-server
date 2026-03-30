@@ -5,11 +5,12 @@ A Model Context Protocol (MCP) server implementation for YouTube, enabling AI la
 
 ## Available Tools
 
-The server currently exposes 10 MCP tools.
+The server currently exposes 11 MCP tools.
 
 | Tool | Description | Required Parameters | Optional Parameters |
 |------|-------------|---------------------|---------------------|
 | `videos_getVideo` | Get detailed information about a YouTube video | `videoId` | `parts` |
+| `videos_getVideos` | Get detailed information about multiple YouTube videos in batched requests | `videoIds` | `parts` |
 | `videos_searchVideos` | Search for videos on YouTube | `query` | `maxResults`, `order`, `publishedAfter`, `publishedBefore`, `channelId`, `uniqueChannels`, `channelMinSubscribers`, `channelMaxSubscribers`, `channelLastUploadAfter`, `channelLastUploadBefore`, `creatorOnly`, `sortBy` |
 | `transcripts_getTranscript` | Get the transcript of a YouTube video | `videoId` | `language` |
 | `channels_getChannel` | Get information about a YouTube channel | `channelId` | None |
@@ -24,6 +25,10 @@ The server currently exposes 10 MCP tools.
 
 #### `videos_getVideo`
 - `videoId` (`string`): The YouTube video ID.
+- `parts` (`string[]`, optional): Specific video resource parts to retrieve.
+
+#### `videos_getVideos`
+- `videoIds` (`string[]`): A list of YouTube video IDs. The server batches them into `videos.list` calls of up to 50 IDs each.
 - `parts` (`string[]`, optional): Specific video resource parts to retrieve.
 
 #### `videos_searchVideos`
@@ -77,6 +82,10 @@ Responses now include:
 #### `channels_listVideos`
 - `channelId` (`string`): The YouTube channel ID.
 - `maxResults` (`number`, optional): Maximum number of videos to return.
+
+Quota note:
+- `videos_getVideos` is the preferred low-quota path when you already know the video IDs.
+- `channels_listVideos` now uses the channel uploads playlist instead of `search.list`, which avoids 100-unit search requests for simple channel uploads browsing.
 
 #### `playlists_getPlaylist`
 - `playlistId` (`string`): The YouTube playlist ID.

@@ -7,6 +7,14 @@ export interface VideoParams {
 }
 
 /**
+ * Batch video details parameters
+ */
+export interface VideosParams {
+  videoIds: string[];
+  parts?: string[];
+}
+
+/**
  * Search videos parameters
  */
 export interface SearchParams {

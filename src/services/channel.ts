@@ -9,43 +9,67 @@ import {
 } from '../types.js';
 
 type EnrichedChannel = any;
+const MAX_CHANNEL_IDS_PER_REQUEST = 50;
+
+function chunkArray<T>(items: T[], chunkSize: number): T[][] {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+
+  return chunks;
+}
 
 /**
  * Service for interacting with YouTube channels
  */
 export class ChannelService {
   private async fetchRawChannels(channelIds: string[], parts = ['snippet', 'statistics', 'contentDetails', 'brandingSettings']) {
-    if (channelIds.length === 0) {
+    const uniqueChannelIds = Array.from(new Set(channelIds.filter(Boolean)));
+
+    if (uniqueChannelIds.length === 0) {
       return [];
     }
 
-    const response = await withYouTubeClient((youtube) => youtube.channels.list({
-      part: parts,
-      id: channelIds
-    }));
+    const batches = chunkArray(uniqueChannelIds, MAX_CHANNEL_IDS_PER_REQUEST);
+    const responses = await Promise.all(
+      batches.map((batch) =>
+        withYouTubeClient((youtube) => youtube.channels.list({
+          part: parts,
+          id: batch
+        }))
+      )
+    );
 
-    return response.data.items || [];
+    return responses.flatMap((response) => response.data.items || []);
   }
 
-  private async getLatestVideoPublishedAt(channelId: string): Promise<string | null> {
+  private async getLatestVideoPublishedAtFromUploadsPlaylist(uploadsPlaylistId: string | undefined): Promise<string | null> {
+    if (!uploadsPlaylistId) {
+      return null;
+    }
+
     try {
-      const response = await withYouTubeClient((youtube) => youtube.search.list({
-        part: ['snippet'],
-        channelId,
+      const response = await withYouTubeClient((youtube) => youtube.playlistItems.list({
+        part: ['contentDetails'],
+        playlistId: uploadsPlaylistId,
         maxResults: 1,
-        order: 'date',
-        type: ['video']
+        fields: 'items/contentDetails/videoPublishedAt'
       }));
 
-      return response.data.items?.[0]?.snippet?.publishedAt || null;
+      return response.data.items?.[0]?.contentDetails?.videoPublishedAt || null;
     } catch {
       return null;
     }
   }
 
-  private async getLatestVideoPublishedAtMap(channelIds: string[]) {
+  private async getLatestVideoPublishedAtMap(rawChannels: any[]) {
     const entries = await Promise.all(
-      channelIds.map(async (channelId) => [channelId, await this.getLatestVideoPublishedAt(channelId)] as const)
+      rawChannels.map(async (channel) => {
+        const uploadsPlaylistId = channel?.contentDetails?.relatedPlaylists?.uploads;
+        return [channel.id, await this.getLatestVideoPublishedAtFromUploadsPlaylist(uploadsPlaylistId)] as const;
+      })
     );
 
     return Object.fromEntries(entries);
@@ -115,7 +139,7 @@ export class ChannelService {
     try {
       const rawChannels = await this.fetchRawChannels(channelIds);
       const latestMap = includeLatestUpload
-        ? await this.getLatestVideoPublishedAtMap(rawChannels.map((channel) => channel.id))
+        ? await this.getLatestVideoPublishedAtMap(rawChannels)
         : {};
 
       return rawChannels.map((channel) => normalizeChannel(channel, latestMap[channel.id] || null));
@@ -311,15 +335,27 @@ export class ChannelService {
     maxResults = 50
   }: ChannelVideosParams): Promise<any[]> {
     try {
-      const response = await withYouTubeClient((youtube) => youtube.search.list({
-        part: ['snippet'],
-        channelId,
+      const channel = await this.fetchRawChannels([channelId], ['contentDetails']);
+      const uploadsPlaylistId = channel[0]?.contentDetails?.relatedPlaylists?.uploads;
+
+      if (!uploadsPlaylistId) {
+        return [];
+      }
+
+      const response = await withYouTubeClient((youtube) => youtube.playlistItems.list({
+        part: ['snippet', 'contentDetails'],
+        playlistId: uploadsPlaylistId,
         maxResults,
-        order: 'date',
-        type: ['video']
+        fields: 'items(contentDetails/videoId,contentDetails/videoPublishedAt,snippet/title,snippet/description,snippet/publishedAt,snippet/channelId,snippet/channelTitle,snippet/thumbnails)'
       }));
 
-      return response.data.items || [];
+      return (response.data.items || []).map((item) => ({
+        id: {
+          videoId: item.contentDetails?.videoId || null,
+        },
+        snippet: item.snippet || null,
+        contentDetails: item.contentDetails || null,
+      }));
     } catch (error) {
       throw new Error(`Failed to list channel videos: ${error instanceof Error ? error.message : String(error)}`);
     }

@@ -13,6 +13,7 @@ import { PlaylistService } from './services/playlist.js';
 import { ChannelService } from './services/channel.js';
 import {
     VideoParams,
+    VideosParams,
     SearchParams,
     TranscriptParams,
     ChannelParams,
@@ -103,6 +104,30 @@ function createMcpServer() {
                             },
                         },
                         required: ['videoId'],
+                    },
+                },
+                {
+                    name: 'videos_getVideos',
+                    description: 'Get detailed information about multiple YouTube videos in a batched low-quota request',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            videoIds: {
+                                type: 'array',
+                                description: 'A list of YouTube video IDs. The server batches requests in chunks of 50 IDs per API call.',
+                                items: {
+                                    type: 'string',
+                                },
+                            },
+                            parts: {
+                                type: 'array',
+                                description: 'Parts of the video resource to retrieve',
+                                items: {
+                                    type: 'string',
+                                },
+                            },
+                        },
+                        required: ['videoIds'],
                     },
                 },
                 {
@@ -401,6 +426,9 @@ function createMcpServer() {
             switch (name) {
                 case 'videos_getVideo':
                     result = await videoService.getVideo(args as unknown as VideoParams);
+                    break;
+                case 'videos_getVideos':
+                    result = await videoService.getVideos(args as unknown as VideosParams);
                     break;
                 case 'videos_searchVideos':
                     result = await videoService.searchVideos(args as unknown as SearchParams);

@@ -1,12 +1,28 @@
-import { VideoParams, SearchParams, TrendingParams, RelatedVideosParams } from '../types.js';
+import { VideoParams, VideosParams, SearchParams, TrendingParams, RelatedVideosParams } from '../types.js';
 import { withYouTubeClient } from './youtube-client.js';
 import { ChannelService } from './channel.js';
+
+const MAX_VIDEO_IDS_PER_REQUEST = 50;
+
+function chunkArray<T>(items: T[], chunkSize: number): T[][] {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+
+  return chunks;
+}
 
 /**
  * Service for interacting with YouTube videos
  */
 export class VideoService {
   private channelService = new ChannelService();
+
+  private getUniqueVideoIds(videoIds: string[]) {
+    return Array.from(new Set(videoIds.map((videoId) => videoId?.trim()).filter(Boolean)));
+  }
 
   /**
    * Get detailed information about a YouTube video
@@ -24,6 +40,38 @@ export class VideoService {
       return response.data.items?.[0] || null;
     } catch (error) {
       throw new Error(`Failed to get video: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Get detailed information about multiple YouTube videos in batched requests
+   */
+  async getVideos({
+    videoIds,
+    parts = ['snippet', 'contentDetails', 'statistics']
+  }: VideosParams): Promise<any[]> {
+    try {
+      const uniqueVideoIds = this.getUniqueVideoIds(videoIds);
+
+      if (uniqueVideoIds.length === 0) {
+        return [];
+      }
+
+      const batches = chunkArray(uniqueVideoIds, MAX_VIDEO_IDS_PER_REQUEST);
+      const responses = await Promise.all(
+        batches.map((batch) =>
+          withYouTubeClient((youtube) =>
+            youtube.videos.list({
+              part: parts,
+              id: batch,
+            })
+          )
+        )
+      );
+
+      return responses.flatMap((response) => response.data.items || []);
+    } catch (error) {
+      throw new Error(`Failed to get videos: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
