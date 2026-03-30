@@ -5,7 +5,9 @@
       "command": "node",
       "args": ["dist/cli.js"],
       "env": {
-        "YOUTUBE_API_KEY": "your-api-key-here"
+        "YOUTUBE_API_KEY": "your-primary-api-key-here",
+        "YOUTUBE_API_KEY2": "your-secondary-api-key-here",
+        "YOUTUBE_API_KEY3": "your-tertiary-api-key-here"
       }
     }
   }

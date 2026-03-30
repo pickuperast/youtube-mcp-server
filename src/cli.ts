@@ -7,7 +7,7 @@ import { hasConfiguredYouTubeApiKey } from './services/youtube-client.js';
 // Check for required environment variables
 if (!hasConfiguredYouTubeApiKey()) {
     console.error('Error: at least one YouTube API key is required.');
-    console.error('Set YOUTUBE_API_KEY, YOUTUBE_API_KEY2, or YOUTUBE_API_KEY3 before running this server.');
+    console.error('Set YOUTUBE_API_KEY or any fallback key from YOUTUBE_API_KEY2 through YOUTUBE_API_KEY9 before running this server.');
     process.exit(1);
 }
 

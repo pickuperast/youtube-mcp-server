@@ -2,6 +2,10 @@ import { google } from 'googleapis';
 
 type YouTubeClient = ReturnType<typeof google.youtube>;
 
+const YOUTUBE_API_KEY_ENV_NAMES = ['YOUTUBE_API_KEY'].concat(
+  Array.from({ length: 8 }, (_, index) => `YOUTUBE_API_KEY${index + 2}`)
+);
+
 const QUOTA_ERROR_REASONS = new Set([
   'quotaExceeded',
   'dailyLimitExceeded',
@@ -20,15 +24,13 @@ class YouTubeClientPool {
       return;
     }
 
-    const apiKeys = [
-      process.env.YOUTUBE_API_KEY,
-      process.env.YOUTUBE_API_KEY2,
-      process.env.YOUTUBE_API_KEY3,
-    ].filter((value): value is string => Boolean(value && value.trim()));
+    const apiKeys = YOUTUBE_API_KEY_ENV_NAMES
+      .map((envName) => process.env[envName])
+      .filter((value): value is string => Boolean(value && value.trim()));
 
     if (apiKeys.length === 0) {
       throw new Error(
-        'At least one YouTube API key must be set. Supported env vars: YOUTUBE_API_KEY, YOUTUBE_API_KEY2, YOUTUBE_API_KEY3.'
+        `At least one YouTube API key must be set. Supported env vars: ${YOUTUBE_API_KEY_ENV_NAMES.join(', ')}.`
       );
     }
 
@@ -106,11 +108,10 @@ class YouTubeClientPool {
 const pool = new YouTubeClientPool();
 
 export function hasConfiguredYouTubeApiKey(): boolean {
-  return Boolean(
-    process.env.YOUTUBE_API_KEY ||
-    process.env.YOUTUBE_API_KEY2 ||
-    process.env.YOUTUBE_API_KEY3
-  );
+  return YOUTUBE_API_KEY_ENV_NAMES.some((envName) => {
+    const value = process.env[envName];
+    return Boolean(value && value.trim());
+  });
 }
 
 export async function withYouTubeClient<T>(request: (youtube: YouTubeClient) => Promise<T>): Promise<T> {

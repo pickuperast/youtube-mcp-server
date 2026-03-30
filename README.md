@@ -142,11 +142,10 @@ npx -y @smithery/cli install @ZubeidHendricks/youtube --client claude
 ## Configuration
 Set the following environment variables:
 * `YOUTUBE_API_KEY`: Primary YouTube Data API key
-* `YOUTUBE_API_KEY2`: Secondary fallback API key
-* `YOUTUBE_API_KEY3`: Third fallback API key
+* `YOUTUBE_API_KEY2` to `YOUTUBE_API_KEY9`: Optional fallback API keys
 * `YOUTUBE_TRANSCRIPT_LANG`: Default language for transcripts (optional, defaults to 'en')
 
-At least one of `YOUTUBE_API_KEY`, `YOUTUBE_API_KEY2`, or `YOUTUBE_API_KEY3` must be set. When a request fails because a key has exhausted its quota, the server retries the same request with the next configured key.
+At least one of `YOUTUBE_API_KEY` through `YOUTUBE_API_KEY9` must be set. When a request fails because a key has exhausted its quota, the server retries the same request with the next configured key in order.
 
 ### Using with VS Code
 
