@@ -1,34 +1,27 @@
-import { google } from 'googleapis';
-import { VideoParams, SearchParams, TrendingParams, RelatedVideosParams } from '../types.js';
+import { VideoParams, VideosParams, SearchParams, TrendingParams, RelatedVideosParams } from '../types.js';
+import { withYouTubeClient } from './youtube-client.js';
+import { ChannelService } from './channel.js';
+
+const MAX_VIDEO_IDS_PER_REQUEST = 50;
+
+function chunkArray<T>(items: T[], chunkSize: number): T[][] {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+
+  return chunks;
+}
 
 /**
  * Service for interacting with YouTube videos
  */
 export class VideoService {
-  private youtube;
-  private initialized = false;
+  private channelService = new ChannelService();
 
-  constructor() {
-    // Don't initialize in constructor
-  }
-
-  /**
-   * Initialize the YouTube client only when needed
-   */
-  private initialize() {
-    if (this.initialized) return;
-    
-    const apiKey = process.env.YOUTUBE_API_KEY;
-    if (!apiKey) {
-      throw new Error('YOUTUBE_API_KEY environment variable is not set.');
-    }
-
-    this.youtube = google.youtube({
-      version: 'v3',
-      auth: apiKey
-    });
-    
-    this.initialized = true;
+  private getUniqueVideoIds(videoIds: string[]) {
+    return Array.from(new Set(videoIds.map((videoId) => videoId?.trim()).filter(Boolean)));
   }
 
   /**
@@ -39,12 +32,10 @@ export class VideoService {
     parts = ['snippet', 'contentDetails', 'statistics'] 
   }: VideoParams): Promise<any> {
     try {
-      this.initialize();
-      
-      const response = await this.youtube.videos.list({
+      const response = await withYouTubeClient((youtube) => youtube.videos.list({
         part: parts,
         id: [videoId]
-      });
+      }));
       
       return response.data.items?.[0] || null;
     } catch (error) {
@@ -53,23 +44,159 @@ export class VideoService {
   }
 
   /**
+   * Get detailed information about multiple YouTube videos in batched requests
+   */
+  async getVideos({
+    videoIds,
+    parts = ['snippet', 'contentDetails', 'statistics']
+  }: VideosParams): Promise<any[]> {
+    try {
+      const uniqueVideoIds = this.getUniqueVideoIds(videoIds);
+
+      if (uniqueVideoIds.length === 0) {
+        return [];
+      }
+
+      const batches = chunkArray(uniqueVideoIds, MAX_VIDEO_IDS_PER_REQUEST);
+      const responses = await Promise.all(
+        batches.map((batch) =>
+          withYouTubeClient((youtube) =>
+            youtube.videos.list({
+              part: parts,
+              id: batch,
+            })
+          )
+        )
+      );
+
+      return responses.flatMap((response) => response.data.items || []);
+    } catch (error) {
+      throw new Error(`Failed to get videos: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
    * Search for videos on YouTube
    */
   async searchVideos({ 
     query, 
-    maxResults = 10 
+    maxResults = 10,
+    order = 'relevance',
+    publishedAfter,
+    publishedBefore,
+    channelId,
+    uniqueChannels = false,
+    channelMinSubscribers,
+    channelMaxSubscribers,
+    channelLastUploadAfter,
+    channelLastUploadBefore,
+    creatorOnly = false,
+    sortBy = 'relevance'
   }: SearchParams): Promise<any[]> {
     try {
-      this.initialize();
-      
-      const response = await this.youtube.search.list({
+      const params: any = {
         part: ['snippet'],
         q: query,
         maxResults,
+        order,
         type: ['video']
+      };
+
+      if (publishedAfter) {
+        params.publishedAfter = publishedAfter;
+      }
+
+      if (publishedBefore) {
+        params.publishedBefore = publishedBefore;
+      }
+
+      if (channelId) {
+        params.channelId = channelId;
+      }
+
+      const response = await withYouTubeClient((youtube) => youtube.search.list(params));
+      let items: any[] = response.data.items || [];
+
+      const needsChannelFiltering =
+        uniqueChannels ||
+        creatorOnly ||
+        typeof channelMinSubscribers === 'number' ||
+        typeof channelMaxSubscribers === 'number' ||
+        Boolean(channelLastUploadAfter) ||
+        Boolean(channelLastUploadBefore) ||
+        sortBy !== 'relevance';
+
+      if (!needsChannelFiltering) {
+        return items;
+      }
+
+      const uniqueChannelIds = Array.from(new Set(
+        items.map((item) => item?.snippet?.channelId).filter(Boolean)
+      ));
+
+      const enrichedChannels = await this.channelService.getChannels({
+        channelIds: uniqueChannelIds,
+        includeLatestUpload: true
       });
-      
-      return response.data.items || [];
+      const channelMap = new Map(enrichedChannels.map((channel) => [channel.id, channel]));
+
+      items = items.filter((item) => {
+        const channel = channelMap.get(item?.snippet?.channelId);
+        const metadata = channel?.normalizedMetadata;
+
+        if (!channel || !metadata) {
+          return false;
+        }
+
+        if (typeof channelMinSubscribers === 'number' && metadata.subscriberCount < channelMinSubscribers) {
+          return false;
+        }
+
+        if (typeof channelMaxSubscribers === 'number' && metadata.subscriberCount > channelMaxSubscribers) {
+          return false;
+        }
+
+        if (channelLastUploadAfter && (!channel.latestVideoPublishedAt || new Date(channel.latestVideoPublishedAt).getTime() < new Date(channelLastUploadAfter).getTime())) {
+          return false;
+        }
+
+        if (channelLastUploadBefore && (!channel.latestVideoPublishedAt || new Date(channel.latestVideoPublishedAt).getTime() > new Date(channelLastUploadBefore).getTime())) {
+          return false;
+        }
+
+        if (creatorOnly && metadata.channelTypeHeuristic !== 'creator') {
+          return false;
+        }
+
+        return true;
+      }).map((item) => ({
+        ...item,
+        channelMetadata: channelMap.get(item?.snippet?.channelId)?.normalizedMetadata || null,
+        latestChannelUploadAt: channelMap.get(item?.snippet?.channelId)?.latestVideoPublishedAt || null,
+      }));
+
+      if (uniqueChannels) {
+        const seenChannelIds = new Set<string>();
+        items = items.filter((item) => {
+          const currentChannelId = item?.snippet?.channelId;
+          if (!currentChannelId || seenChannelIds.has(currentChannelId)) {
+            return false;
+          }
+
+          seenChannelIds.add(currentChannelId);
+          return true;
+        });
+      }
+
+      if (sortBy === 'subscribers_asc' || sortBy === 'indie_priority') {
+        items.sort((left, right) => (left.channelMetadata?.subscriberCount || 0) - (right.channelMetadata?.subscriberCount || 0));
+      } else if (sortBy === 'subscribers_desc') {
+        items.sort((left, right) => (right.channelMetadata?.subscriberCount || 0) - (left.channelMetadata?.subscriberCount || 0));
+      } else if (sortBy === 'recent_activity') {
+        items.sort((left, right) => new Date(right.latestChannelUploadAt || 0).getTime() - new Date(left.latestChannelUploadAt || 0).getTime());
+      }
+
+      return items;
     } catch (error) {
       throw new Error(`Failed to search videos: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -82,12 +209,10 @@ export class VideoService {
     videoId 
   }: { videoId: string }): Promise<any> {
     try {
-      this.initialize();
-      
-      const response = await this.youtube.videos.list({
+      const response = await withYouTubeClient((youtube) => youtube.videos.list({
         part: ['statistics'],
         id: [videoId]
-      });
+      }));
       
       return response.data.items?.[0]?.statistics || null;
     } catch (error) {
@@ -104,8 +229,6 @@ export class VideoService {
     videoCategoryId = ''
   }: TrendingParams): Promise<any[]> {
     try {
-      this.initialize();
-      
       const params: any = {
         part: ['snippet', 'contentDetails', 'statistics'],
         chart: 'mostPopular',
@@ -117,7 +240,7 @@ export class VideoService {
         params.videoCategoryId = videoCategoryId;
       }
       
-      const response = await this.youtube.videos.list(params);
+      const response = await withYouTubeClient((youtube) => youtube.videos.list(params));
       
       return response.data.items || [];
     } catch (error) {
@@ -133,14 +256,14 @@ export class VideoService {
     maxResults = 10 
   }: RelatedVideosParams): Promise<any[]> {
     try {
-      this.initialize();
-      
-      const response = await this.youtube.search.list({
+      const params: any = {
         part: ['snippet'],
         relatedToVideoId: videoId,
         maxResults,
         type: ['video']
-      });
+      };
+
+      const response = await withYouTubeClient((youtube) => youtube.search.list(params));
       
       return response.data.items || [];
     } catch (error) {
